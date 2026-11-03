@@ -1,0 +1,29 @@
+# 内核工作区（不对外）
+.openthree/
+
+# 开发阶段的方案 / 讨论稿（不对外）
+design/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 运行时数据
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,414 @@
+openapi: 3.1.0
+info:
+  title: A2A Discover Protocol (ADP) — Core
+  version: 1.0.0-core
+  summary: 极简中心化 Agent Registry
+  description: |
+    Registry 只声称两件事：
+
+      ① 我在 `checkedAt` 从 `url` 取到了 `card`（摘要 `cardHash`）；
+      ② 我在 `lastOkAt` 还能取到它。
+
+    它不签名、不评分、不代理 A2A 流量、不修改 AgentCard。
+    信任由 Consumer 自行核验：重算 sha256(JCS(card))，再验 card.signatures。
+    因此攻破 Registry 最多污染「被发现」，无法伪造「是谁」。
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: https://registry.example.com
+    description: 任一 ADP Core 实例
+tags:
+  - name: discovery
+  - name: agents
+paths:
+  /.well-known/a2a-registry.json:
+    get:
+      tags: [discovery]
+      operationId: getRegistryCard
+      summary: Registry 自我描述（RegistryCard）
+      security: []
+      responses:
+        '200':
+          description: RegistryCard
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistryCard'
+  /v1/agents:
+    post:
+      tags: [agents]
+      operationId: registerAgent
+      summary: 注册 —— Registry 现场抓取该 URL 上的 AgentCard
+      description: |
+        注册即验证：Registry 立刻 GET `url`，校验它是合法 AgentCard 后入库。
+        因此「能注册」≡「控制该 URL」，无需任何挑战令牌。
+        `id` 由 `url` 确定性派生，重复注册幂等。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Registration'
+      responses:
+        '201':
+          description: 新建成功（唯一一次返回 manageToken）
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRecordWithToken'
+        '200':
+          description: 已存在，返回已存记录；manageToken 不轮换（防抢注）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/Unverifiable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+    get:
+      tags: [agents]
+      operationId: listAgents
+      summary: 检索（默认返回 summary，full=true 返回完整记录）
+      description: |
+        结果顺序固定为 `firstSeenAt` 降序、`id` 升序，保证游标稳定。
+        Registry 不做相关性排序 —— 排序权归 Consumer。
+      security: []
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 200
+          description: 全文匹配 card.name / description / skills[].name|description
+        - name: skill
+          in: query
+          schema:
+            type: string
+          description: 精确匹配 skills[].id
+        - name: tag
+          in: query
+          schema:
+            type: string
+          description: 精确匹配 skills[].tags（任一）
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ok, down]
+        - name: changedSince
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: 只返回 changedAt >= 该时刻的条目（卡片变更是可订阅的事实）
+        - name: full
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: true = 返回含 card 的完整记录
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 分页结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /v1/agents/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^a_[0-9a-f]{16}$'
+    get:
+      tags: [agents]
+      operationId: getAgent
+      summary: 取单条记录（含原始 card）
+      security: []
+      responses:
+        '200':
+          description: AgentRecord
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRecord'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [agents]
+      operationId: deleteAgent
+      summary: 退订（需要注册时拿到的 manageToken）
+      parameters:
+        - name: X-ADP-Token
+          in: header
+          required: true
+          schema:
+            type: string
+          description: 注册响应里一次性返回的 manageToken
+      responses:
+        '204':
+          description: 已删除
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    manageToken:
+      type: apiKey
+      in: header
+      name: X-ADP-Token
+  responses:
+    BadRequest:
+      description: 参数非法（非 https、url 超长、limit 越界等）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unverifiable:
+      description: |
+        该 URL 抓不到卡，或抓到的不是合法 AgentCard（缺必填字段 /
+        TLS 无效 / 命中 SSRF 阻断 / 体积超限）。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: manageToken 缺失或不匹配
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: 该 id 不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooManyRequests:
+      description: 触发注册限流（按 IP + 按域）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Registration:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: '^https://'
+          maxLength: 2048
+          description: AgentCard 的可公开抓取地址，通常是 https://{domain}/.well-known/agent-card.json
+    AgentRecord:
+      type: object
+      additionalProperties: false
+      required: [id, url, card, cardHash, status, firstSeenAt, checkedAt, lastOkAt, failures]
+      properties:
+        id:
+          type: string
+          pattern: '^a_[0-9a-f]{16}$'
+          description: 'a_ + sha256(url) 前 16 个 hex 字符'
+        url:
+          type: string
+          format: uri
+        card:
+          type: object
+          description: A2A AgentCard，逐字节原样保存，未加工，可直接喂给 A2A SDK
+        cardHash:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}$'
+          description: sha256(JCS(card))，JCS = RFC 8785（A2A 签名用的同一套规范化）
+        status:
+          type: string
+          enum: [ok, down]
+          description: ok = 最近一次探测成功；down = 连续失败 >= 3 次
+        firstSeenAt:
+          type: string
+          format: date-time
+        checkedAt:
+          type: string
+          format: date-time
+          description: 最近一次探测时刻（无论成败）
+        lastOkAt:
+          type: string
+          format: date-time
+          description: 最近一次探测成功时刻
+        failures:
+          type: integer
+          minimum: 0
+          description: 连续失败次数
+        changedAt:
+          type: [string, 'null']
+          format: date-time
+          description: 卡片内容最近一次变化时刻
+        prevHash:
+          type: [string, 'null']
+          pattern: '^sha256:[0-9a-f]{64}$'
+          description: 变化前的 cardHash（供审计）
+    AgentRecordWithToken:
+      type: object
+      additionalProperties: false
+      description: |
+        AgentRecord 的全部字段，外加**一次性** manageToken。
+        独立定义（而非 allOf）是因为 AgentRecord 的 `additionalProperties: false`
+        在 allOf 组合下会拒掉 manageToken —— JSON Schema 的 additionalProperties
+        只看同一 schema 对象内的 properties。属性集由 spec/validate.py 断言不得漂移。
+      required: [id, url, card, cardHash, status, firstSeenAt, checkedAt, lastOkAt, failures, manageToken]
+      properties:
+        id:
+          type: string
+          pattern: '^a_[0-9a-f]{16}$'
+        url:
+          type: string
+          format: uri
+        card:
+          type: object
+          description: A2A AgentCard，逐字节原样保存
+        cardHash:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}$'
+        status:
+          type: string
+          enum: [ok, down]
+        firstSeenAt:
+          type: string
+          format: date-time
+        checkedAt:
+          type: string
+          format: date-time
+        lastOkAt:
+          type: string
+          format: date-time
+        failures:
+          type: integer
+          minimum: 0
+        changedAt:
+          type: [string, 'null']
+          format: date-time
+        prevHash:
+          type: [string, 'null']
+          pattern: '^sha256:[0-9a-f]{64}$'
+        manageToken:
+          type: string
+          description: 仅在此响应出现一次；DELETE 时放入 X-ADP-Token。丢失需联系运维。
+    AgentSummary:
+      type: object
+      additionalProperties: false
+      required: [id, url, name, description, status, checkedAt, lastOkAt, skills]
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+          format: uri
+        name:
+          type: string
+        description:
+          type: string
+        skills:
+          type: array
+          items:
+            type: string
+          description: skills[].id 列表
+        tags:
+          type: array
+          items:
+            type: string
+          description: skills[].tags 去重合并
+        status:
+          type: string
+          enum: [ok, down]
+        cardHash:
+          type: string
+        checkedAt:
+          type: string
+          format: date-time
+        lastOkAt:
+          type: string
+          format: date-time
+        failures:
+          type: integer
+    AgentList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/AgentSummary'
+              - $ref: '#/components/schemas/AgentRecord'
+        nextCursor:
+          type: [string, 'null']
+    RegistryCard:
+      type: object
+      additionalProperties: false
+      required: [name, apiBase, spec, probeIntervalSeconds, limits]
+      properties:
+        name:
+          type: string
+        apiBase:
+          type: string
+          format: uri
+          description: 本 Registry 的 API 根，例如 https://registry.example.com/v1
+        spec:
+          type: string
+          format: uri
+          description: 本协议的规范地址
+        probeIntervalSeconds:
+          type: integer
+          description: 健康 agent 的探测周期
+        limits:
+          type: object
+          additionalProperties: false
+          properties:
+            maxCardBytes:
+              type: integer
+              default: 1048576
+            maxAgentsPerDomain:
+              type: integer
+              default: 100
+        contact:
+          type: string
+          description: 运维联系方式（投诉 / 申诉）
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: 机器可读错误码，如 BAD_URL / CARD_UNREACHABLE / NOT_AN_AGENT_CARD / RATE_LIMITED
+        message:
+          type: string
+        detail:
+          type: object
+          additionalProperties: true
