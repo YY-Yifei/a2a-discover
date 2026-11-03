@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import contextlib
 import ipaddress
+import re
 import socket
 import threading
 from collections.abc import Iterator, Sequence
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 MAX_URL_LENGTH = 2048
+
+_PERCENT = re.compile(r"%[0-9a-fA-F]{2}")
 
 _BLOCKED_V4 = tuple(
     ipaddress.ip_network(network)
@@ -72,10 +75,21 @@ def is_public_ip(ip: str) -> bool:
 
 
 def normalize_url(url: str) -> str:
-    """校验并返回原样的 https URL（不做任何语义重写）。
+    """校验并返回**归一化**后的 https URL（规则见 spec §4.1）。
 
-    拒绝：非 https、带 userinfo、带 fragment、超过 2048 字符、非绝对 URL。
-    fragment 必须拒绝而不是悄悄剥掉 —— ``id`` 由 url 派生，静默改写会让 id 漂移。
+    归一化 MUST 且仅 MUST 做三件事：
+
+    1. scheme 与 host 转小写；
+    2. 去掉默认端口 ``:443``；
+    3. path 与 query 的百分号编码统一为大写十六进制。
+
+    不做任何语义重写：不补尾斜杠、不合并 ``/./`` 与 ``/../``、不排序或改写 query
+    —— ``id`` 由归一化后的字符串派生，多余的改写会让 ``id`` 漂移。
+
+    拒绝：非 https、带 userinfo、带 fragment、非 ASCII host、超过 2048 字符、非绝对 URL。
+
+    非 ASCII host 一律拒绝而不做 IDNA 映射 —— UTS-46 的映射与算法版本相关，
+    纳入它会让 ``id`` 从「URL 的确定性函数」退化为「URL + 本版 IDNA」（spec §4.1）。
     """
     if not isinstance(url, str):
         raise UrlError("url 必须是字符串")
@@ -91,9 +105,29 @@ def normalize_url(url: str) -> str:
         raise UrlError("url 不得包含 userinfo")
     if parts.fragment:
         raise UrlError("url 不得包含 fragment")
-    if not parts.hostname:
+    host = parts.hostname
+    if not host:
         raise UrlError("url 缺少主机名")
-    return candidate
+    if not host.isascii():
+        raise UrlError("url 的 host 必须是纯 ASCII（非 ASCII 域名请先转写为 punycode）")
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise UrlError("url 端口非法") from exc
+
+    host = host.lower()
+    if ":" in host:  # IPv6 字面量要放回方括号
+        host = f"[{host}]"
+    netloc = host if port in (None, 443) else f"{host}:{port}"
+
+    return urlunsplit(
+        ("https", netloc, _upper_percent(parts.path), _upper_percent(parts.query), "")
+    )
+
+
+def _upper_percent(text: str) -> str:
+    """把百分号编码的三元组统一为大写十六进制（``%2f`` → ``%2F``）。"""
+    return _PERCENT.sub(lambda match: match.group(0).upper(), text)
 
 
 def host_and_port(url: str) -> tuple[str, int]:

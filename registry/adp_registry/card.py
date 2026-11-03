@@ -2,7 +2,7 @@
 
 ADP Core 的两条不变式都落在这里：
 
-* I2 —— Card 逐字节原样保存，因此本模块只读不写；
+* I2 —— Card 的字段与字段值原样保存，因此本模块只读不写（cardHash 是语义摘要，不要求逐字节复现源站报文）；
 * I4 —— ``cardHash`` 必须由 Consumer 可独立重算，因此规范化必须走 RFC 8785 (JCS)，
   与 A2A 签名使用的同一套规则。
 """
@@ -85,7 +85,12 @@ def card_hash(card: Mapping[str, Any]) -> str:
 
 
 def derive_id(url: str) -> str:
-    """``a_`` + sha256(url) 前 16 个 hex 字符 —— 确定性派生，因此重复注册天然幂等。"""
+    """``a_`` + sha256(url) 前 16 个 hex 字符 —— 确定性派生，因此重复注册天然幂等。
+
+    调用方 MUST 先经 ``netguard.normalize_url`` 归一（spec §4.1），否则同一 URL 的
+    书写变体（host 大小写、默认端口、百分号编码）会派生出不同 id，出现「两个 id、
+    同一张卡」。本函数刻意不做归一：它必须是纯函数，归一规则只应有一处定义。
+    """
     return ID_PREFIX + hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
 
 

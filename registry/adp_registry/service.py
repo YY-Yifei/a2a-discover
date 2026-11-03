@@ -3,8 +3,8 @@
 三条不变式在这里被守住：
 
 * I1 只写事实 —— 记录里没有任何评价性字段；
-* I2 Card 原样存 —— 只在计算 ``cardHash`` 与 summary 时**读**它；
-* I3 注册即抓取 —— ``register()`` 里没有「先登记后验证」的分支。
+* I2 Card 的字段与字段值原样存 —— 只在计算 ``cardHash`` 与 summary 时**读**它；
+* I3 注册 ≠ 控制该 URL —— ``register()`` 里没有「先登记后验证」的分支，也不声称所有权。
 """
 
 from __future__ import annotations

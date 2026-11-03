@@ -6,12 +6,24 @@ info:
   description: |
     Registry 只声称两件事：
 
-      ① 我在 `checkedAt` 从 `url` 取到了 `card`（摘要 `cardHash`）；
-      ② 我在 `lastOkAt` 还能取到它。
+      ① 我在 `lastOkAt` 从 `url` 取到了 `card`，摘要为 `cardHash`；
+      ② 此外我只有探测记录：`checkedAt` 是最近一次尝试（无论成败，失败也会前进），
+         `failures` 是连续失败次数。
 
-    它不签名、不评分、不代理 A2A 流量、不修改 AgentCard。
+    它不签名、不评分、不代理 A2A 流量、不修改 AgentCard，**也不证明任何事**：
+    注册成功只说明该 URL 此刻放着这张卡，不说明注册者拥有该 URL，也不说明
+    注册者就是卡片的主人（见 spec I3）。
+
     信任由 Consumer 自行核验：重算 sha256(JCS(card))，再验 card.signatures。
-    因此攻破 Registry 最多污染「被发现」，无法伪造「是谁」。
+    身份只来自 A2A 签名 —— 本协议**不提供身份保证**。攻破 Registry 可以把任意卡片
+    塞进「被发现」这一层；它伪造不出签名，但**能伪造「被发现」**：把一张由攻击者
+    **真实签名**的卡排进检索结果前列，Consumer 验签全过却选错人 —— 全程不篡改任何
+    字节，所以重算 cardHash 与验签都拦不住。
+
+    上界因此是条件式的：① Card 带有效签名；② Consumer 有先验公钥锚点，且锚定的正是
+    它预期的身份；③ Consumer 用该锚点决定该看哪一条结果（而不是从结果里挑一条再验签）。
+    三者同时成立时，Registry 才无法把「是谁」伪造到攻击者名下；其余情况（无签名 /
+    无锚点 / TOFU / 按检索结果挑选）均无身份保证。
   license:
     name: Apache-2.0
     identifier: Apache-2.0
@@ -41,9 +53,14 @@ paths:
       operationId: registerAgent
       summary: 注册 —— Registry 现场抓取该 URL 上的 AgentCard
       description: |
-        注册即验证：Registry 立刻 GET `url`，校验它是合法 AgentCard 后入库。
-        因此「能注册」≡「控制该 URL」，无需任何挑战令牌。
-        `id` 由 `url` 确定性派生，重复注册幂等。
+        注册即抓取：Registry 立刻 GET `url`，校验它是合法 AgentCard 后入库。
+
+        这只证明「该 URL 此刻放着这张卡」，**不证明注册者拥有该 URL** ——
+        注册不需要任何所有权证明，也不发任何挑战令牌（见 spec I3）。
+        首次注册者获得 `manageToken`，条目已存在时不轮换；因此**真正的发布者
+        可能永远拿不到自己条目的管理权**，协议不提供找回路径。
+        `id` 由归一化后的 `url` 确定性派生（scheme/host 小写、去默认端口 `:443`、
+        百分号编码大写），重复注册幂等。
       requestBody:
         required: true
         content:
@@ -62,7 +79,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AgentRecordWithToken'
         '200':
-          description: 已存在，返回已存记录；manageToken 不轮换（防抢注）
+          description: 已存在，返回已存记录；manageToken 不轮换（防「再注册劫持」，不防首次抢注）
           content:
             application/json:
               schema:
@@ -80,6 +97,7 @@ paths:
       description: |
         结果顺序固定为 `firstSeenAt` 降序、`id` 升序，保证游标稳定。
         Registry 不做相关性排序 —— 排序权归 Consumer。
+        `changedSince` 只回答**已有条目**的内容变化，不是 feed（变更流）。
       security: []
       parameters:
         - name: q
@@ -108,7 +126,14 @@ paths:
           schema:
             type: string
             format: date-time
-          description: 只返回 changedAt >= 该时刻的条目（卡片变更是可订阅的事实）
+          description: |
+            只返回 changedAt >= 该时刻的条目。**不是 feed**（变更流）：
+            新注册条目 changedAt 为 null，查不到；删除不产生事件；prevHash 只保留上一版。
+            比较 MUST 按时间点（instant），MUST NOT 按字符串比较 —— 带 +08:00 之类偏移的
+            合法 date-time 与 Z 串做文本比较会错序。
+            这是可重复读的状态快照查询，不是投递：`>=` 边界会让边界记录重复返回（Consumer
+            MUST 幂等去重）；中间版本会丢失（同一秒内多次变化只留最后一个 changedAt）。
+            **不提供逐变更投递保证** —— 既不声称 at-least-once，更不声称 exactly-once。
         - name: full
           in: query
           schema:
@@ -161,6 +186,9 @@ paths:
       tags: [agents]
       operationId: deleteAgent
       summary: 退订（需要注册时拿到的 manageToken）
+      description: |
+        硬删除，不保留墓碑 —— 删除后该 URL 可被任何人重新注册并拿走新的 manageToken
+        （见 spec §5.5 与 I3）。`manageToken` 是首注册者的管理凭据，不是所有权证明。
       parameters:
         - name: X-ADP-Token
           in: header
@@ -183,7 +211,7 @@ components:
       name: X-ADP-Token
   responses:
     BadRequest:
-      description: 参数非法（非 https、url 超长、limit 越界等）
+      description: 参数非法（非 https、带 userinfo/fragment、非 ASCII host、url 超长、limit 越界等）
       content:
         application/json:
           schema:
@@ -209,7 +237,7 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     TooManyRequests:
-      description: 触发注册限流（按 IP + 按域）
+      description: 触发注册限流（按 IP + 按主机名的条目数）
       content:
         application/json:
           schema:
@@ -223,43 +251,56 @@ components:
         url:
           type: string
           format: uri
-          pattern: '^https://'
+          pattern: '^[Hh][Tt][Tt][Pp][Ss]://'
           maxLength: 2048
-          description: AgentCard 的可公开抓取地址，通常是 https://{domain}/.well-known/agent-card.json
+          description: |
+            AgentCard 的可公开抓取地址，通常是 https://{domain}/.well-known/agent-card.json。
+            scheme 大小写不敏感（`HTTPS://` 合法，归一为小写）；host MUST 为纯 ASCII，
+            非 ASCII 域名请先转写为 punycode（不做 IDNA 映射，见 spec §4.1）。
     AgentRecord:
       type: object
       additionalProperties: false
-      required: [id, url, card, cardHash, status, firstSeenAt, checkedAt, lastOkAt, failures]
+      required: [id, url, card, cardHash, status, firstSeenAt, checkedAt, lastOkAt, failures, changedAt, prevHash]
       properties:
         id:
           type: string
           pattern: '^a_[0-9a-f]{16}$'
-          description: 'a_ + sha256(url) 前 16 个 hex 字符'
+          description: 'a_ + sha256(normalized_url) 前 16 个 hex 字符'
         url:
           type: string
           format: uri
+          description: 归一化后的地址（scheme/host 小写、去默认端口 :443、百分号编码大写）
         card:
           type: object
-          description: A2A AgentCard，逐字节原样保存，未加工，可直接喂给 A2A SDK
+          description: |
+            A2A AgentCard，字段与字段值原样保存（不增删改字段，不补默认值）。
+            **不要求逐字节保持源站报文**：键序与空白由实现/传输层决定，
+            因此 cardHash 是语义摘要，不是原始报文摘要。
         cardHash:
           type: string
           pattern: '^sha256:[0-9a-f]{64}$'
-          description: sha256(JCS(card))，JCS = RFC 8785（A2A 签名用的同一套规范化）
+          description: sha256(JCS(card))，JCS = RFC 8785；语义摘要，不覆盖键序与空白
         status:
           type: string
           enum: [ok, down]
-          description: ok = 最近一次探测成功；down = 连续失败 >= 3 次
+          description: down ⇔ 连续失败 >= 3 次；否则 ok（失败未达 3 次时仍为 ok，但 failures > 0）
         firstSeenAt:
           type: string
           format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
+          description: 首次成功入库时刻（UTC、秒级定宽）
         checkedAt:
           type: string
           format: date-time
-          description: 最近一次探测时刻（无论成败）
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
+          description: |
+            最近一次探测**尝试**时刻（无论成败，失败也会前进；UTC、秒级定宽）。
+            不能用来表述「我在这个时刻取到了 card」—— 那是 lastOkAt。
         lastOkAt:
           type: string
           format: date-time
-          description: 最近一次探测成功时刻
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
+          description: 最近一次探测成功时刻 —— 核心断言所指的时间点（UTC、秒级定宽）
         failures:
           type: integer
           minimum: 0
@@ -267,11 +308,14 @@ components:
         changedAt:
           type: [string, 'null']
           format: date-time
-          description: 卡片内容最近一次变化时刻
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
+          description: |
+            卡片内容最近一次变化时刻（= 那一次成功探测的 lastOkAt）；从未变化为 null。
+            该键始终存在（不得省略）。MUST NOT 取 checkedAt —— 失败探测会让它前进。
         prevHash:
           type: [string, 'null']
           pattern: '^sha256:[0-9a-f]{64}$'
-          description: 变化前的 cardHash（供审计）
+          description: 变化前的 cardHash（供审计）；从未变化为 null。该键始终存在（不得省略）
     AgentRecordWithToken:
       type: object
       additionalProperties: false
@@ -280,7 +324,7 @@ components:
         独立定义（而非 allOf）是因为 AgentRecord 的 `additionalProperties: false`
         在 allOf 组合下会拒掉 manageToken —— JSON Schema 的 additionalProperties
         只看同一 schema 对象内的 properties。属性集由 spec/validate.py 断言不得漂移。
-      required: [id, url, card, cardHash, status, firstSeenAt, checkedAt, lastOkAt, failures, manageToken]
+      required: [id, url, card, cardHash, status, firstSeenAt, checkedAt, lastOkAt, failures, changedAt, prevHash, manageToken]
       properties:
         id:
           type: string
@@ -290,7 +334,7 @@ components:
           format: uri
         card:
           type: object
-          description: A2A AgentCard，逐字节原样保存
+          description: A2A AgentCard，字段与字段值原样保存（语义一致，非逐字节）
         cardHash:
           type: string
           pattern: '^sha256:[0-9a-f]{64}$'
@@ -300,28 +344,38 @@ components:
         firstSeenAt:
           type: string
           format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
         checkedAt:
           type: string
           format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
         lastOkAt:
           type: string
           format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
         failures:
           type: integer
           minimum: 0
         changedAt:
           type: [string, 'null']
           format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
         prevHash:
           type: [string, 'null']
           pattern: '^sha256:[0-9a-f]{64}$'
         manageToken:
           type: string
-          description: 仅在此响应出现一次；DELETE 时放入 X-ADP-Token。丢失需联系运维。
+          description: |
+            仅在此响应出现一次；DELETE 时放入 X-ADP-Token。
+            它是**首注册者**的管理凭据，不是所有权证明：条目不轮换 token，
+            丢失或被他人抢先注册都无法自助找回（部署方可人工介入）。
     AgentSummary:
       type: object
       additionalProperties: false
-      required: [id, url, name, description, status, checkedAt, lastOkAt, skills]
+      description: |
+        默认列表视图。以下字段**全部必填** —— 省略与省略式实现会让 Consumer
+        多写分支（契约不得允许「可以合法地不给」）。
+      required: [id, url, name, description, skills, tags, status, cardHash, checkedAt, lastOkAt, failures]
       properties:
         id:
           type: string
@@ -341,18 +395,21 @@ components:
           type: array
           items:
             type: string
-          description: skills[].tags 去重合并
+          description: skills[].tags 去重合并（无 tags 时为 []）
         status:
           type: string
           enum: [ok, down]
         cardHash:
           type: string
+          description: 语义摘要 sha256(JCS(card))
         checkedAt:
           type: string
           format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
         lastOkAt:
           type: string
           format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
         failures:
           type: integer
     AgentList:
@@ -396,6 +453,11 @@ components:
             maxAgentsPerDomain:
               type: integer
               default: 100
+              description: |
+                同一**主机名**（url 的 host，小写、不含端口与路径）下的条目数上限。
+                计数按主机名归并、不区分 path：同一主机名下的多个 path 共享同一预算，
+                因此它**能**限制「同一域名下用多路径堆量」；不限制跨主机名（含子域）
+                的堆量 —— 那是部署策略，不属于 Core。
         contact:
           type: string
           description: 运维联系方式（投诉 / 申诉）

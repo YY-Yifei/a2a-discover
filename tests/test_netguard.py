@@ -53,18 +53,55 @@ def test_normalize_url_rejects(url):
         netguard.normalize_url(url)
 
 
-def test_normalize_url_keeps_url_verbatim():
+def test_normalize_url_canonicalizes_host_and_default_port():
+    """spec §4.1：scheme/host 小写 + 去默认端口 :443。"""
+    assert netguard.normalize_url("https://Geo.Example.com:443/Card.json") == (
+        "https://geo.example.com/Card.json"
+    )
+    assert netguard.normalize_url("HTTPS://GEO.EXAMPLE.COM/Card.json") == (
+        "https://geo.example.com/Card.json"
+    )
+
+
+def test_normalize_url_uppercases_percent_escapes():
+    """spec §4.1：百分号编码统一为大写十六进制（path 与 query 各做一次）。"""
+    assert netguard.normalize_url("https://geo.example.com/a%2fb?x=%3a") == (
+        "https://geo.example.com/a%2Fb?x=%3A"
+    )
+
+
+def test_normalize_url_does_not_rewrite_semantics():
+    """不补尾斜杠、不合并 ../、不排序 query、保留非默认端口。"""
     url = "https://geo.example.com/.well-known/agent-card.json?x=1"
     assert netguard.normalize_url(url) == url
-    # 不做语义重写：尾斜杠不加、大小写不动
-    assert netguard.normalize_url("https://Geo.Example.com/Card.json") == (
-        "https://Geo.Example.com/Card.json"
+    assert netguard.normalize_url("https://geo.example.com/a/../b") == (
+        "https://geo.example.com/a/../b"
+    )
+    assert netguard.normalize_url("https://geo.example.com:8443/card.json") == (
+        "https://geo.example.com:8443/card.json"
     )
 
 
 def test_normalize_url_rejects_long_url():
     with pytest.raises(netguard.UrlError):
         netguard.normalize_url("https://geo.example.com/" + "a" * 2048)
+
+
+def test_normalize_url_rejects_non_ascii_host():
+    """spec §4.1：非 ASCII host 直接拒绝，不做 IDNA 映射。"""
+    for url in (
+        "https://例子.测试/card.json",
+        "https://exämple.com/card.json",
+    ):
+        with pytest.raises(netguard.UrlError):
+            netguard.normalize_url(url)
+
+
+def test_punycode_host_is_accepted_and_is_a_different_entry():
+    """punycode 是 ASCII，合法；且与 Unicode 写法不是同一条目（不做映射）。"""
+    assert netguard.normalize_url("https://xn--fsqu00a.xn--0zwm56d/card.json") == (
+        "https://xn--fsqu00a.xn--0zwm56d/card.json"
+    )
 
 
 def _resolver(mapping):

@@ -6,7 +6,9 @@
 * 每次请求前重新解析并校验 IP，且连接被钉在这些 IP 上（``netguard.pinned_dns``）；
 * 重定向 ≤ 3 跳，**每跳从 URL 重新开始**校验；
 * connect ≤ 5s / total ≤ 10s / body ≤ maxCardBytes（流式计数，超限即断）；
-* 不转发 Cookie / Authorization / Referer，忽略环境代理（``trust_env=False``）。
+* 不转发 Cookie / Authorization / Referer；``trust_env=False`` 不读环境变量代理。
+  §7.7 的出网路径要求还包含 sidecar / service mesh —— 它们在本进程之外，
+  本模块关不掉，必须由部署保证（见 ``spec/adp-core.md`` §7 第 7 条）。
 """
 
 from __future__ import annotations
