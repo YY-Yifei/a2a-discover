@@ -1,8 +1,5 @@
-# 内核工作区（不对外）
+# 内核工作区（运行状态 / 日志 / 计划，不对外）
 .openthree/
-
-# 开发阶段的方案 / 讨论稿（不对外）
-design/
 
 # Python
 __pycache__/
@@ -21,6 +18,12 @@ venv/
 *.db-wal
 *.db-shm
 *.sqlite3
+*.log
+
+# 备份 / 补丁残留
+*.orig
+*.rej
+*.bak
 
 # 编辑器 / 系统
 .vscode/
