@@ -84,12 +84,12 @@ def normalize_url(url: str) -> str:
     3. path 与 query 的百分号编码统一为大写十六进制。
 
     不做任何语义重写：不补尾斜杠、不合并 ``/./`` 与 ``/../``、不排序或改写 query
-    —— ``id`` 由归一化后的字符串派生，多余的改写会让 ``id`` 漂移。
+    —— 归一化结果是**条目去重键**，多余的改写会让同一 URL 的两种写法变成两个条目。
 
     拒绝：非 https、带 userinfo、带 fragment、非 ASCII host、超过 2048 字符、非绝对 URL。
 
     非 ASCII host 一律拒绝而不做 IDNA 映射 —— UTS-46 的映射与算法版本相关，
-    纳入它会让 ``id`` 从「URL 的确定性函数」退化为「URL + 本版 IDNA」（spec §4.1）。
+    纳入它会让去重键从「逐字节可比的字符串」退化为「字符串 + 本版 IDNA」（spec §4.1）。
     """
     if not isinstance(url, str):
         raise UrlError("url 必须是字符串")

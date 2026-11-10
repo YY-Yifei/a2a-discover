@@ -124,10 +124,24 @@ def check(doc: dict) -> list[str]:
     if status_enum != ["ok", "down"]:
         problems.append(f"status 应只有 ok/down，实际 {status_enum!r}")
 
-    sample_url = "https://geo.example.com/.well-known/agent-card.json"
-    sample_id = "a_" + hashlib.sha256(sample_url.encode()).hexdigest()[:16]
-    if not re.fullmatch(r"^a_[0-9a-f]{16}$", sample_id):
-        problems.append("id 派生规则与 schema pattern 不一致")
+    # id 的生成算法由实现自选（§4.1），契约只约束形状。这里查两件事：
+    # ① 三处 id pattern 必须一致；② RECOMMENDED 派生法与 ULID 形态都必须落在 pattern 内
+    #    —— 否则契约会把参考实现自己的合法产出、或另一种合法选择判成非法。
+    id_patterns = {
+        schemas[name]["properties"]["id"]["pattern"]
+        for name in ("AgentRecord", "AgentRecordWithToken", "AgentSummary")
+        if "id" in schemas.get(name, {}).get("properties", {})
+    }
+    if len(id_patterns) != 1:
+        problems.append(f"id pattern 在 schema 间不一致：{sorted(id_patterns)}")
+    else:
+        id_pattern = id_patterns.pop()
+        sample_url = "https://geo.example.com/.well-known/agent-card.json"
+        sample_id = "a_" + hashlib.sha256(sample_url.encode()).hexdigest()[:16]
+        if not re.fullmatch(id_pattern, sample_id):
+            problems.append(f"id pattern 拒绝了 RECOMMENDED 派生法的产出：{sample_id}")
+        if not re.fullmatch(id_pattern, "01ARZ3NDEKTSV4RRFFQ69G5FAV"):
+            problems.append("id pattern 拒绝了 ULID 形态 —— 算法应由实现选择（§4.1）")
 
     return problems
 

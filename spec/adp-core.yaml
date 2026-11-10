@@ -59,8 +59,9 @@ paths:
         注册不需要任何所有权证明，也不发任何挑战令牌（见 spec I3）。
         首次注册者获得 `manageToken`，条目已存在时不轮换；因此**真正的发布者
         可能永远拿不到自己条目的管理权**，协议不提供找回路径。
-        `id` 由归一化后的 `url` 确定性派生（scheme/host 小写、去默认端口 `:443`、
-        百分号编码大写），重复注册幂等。
+        `url` 归一化后作为去重键（scheme/host 小写、去默认端口 `:443`、百分号编码大写）：
+        同一 `url` 至多一个条目，重复注册返回已有条目且不轮换 token。
+        `id` 是 URL-safe 的不透明句柄，生成算法由实现选择（spec §4.1）。
       requestBody:
         required: true
         content:
@@ -167,7 +168,7 @@ paths:
         required: true
         schema:
           type: string
-          pattern: '^a_[0-9a-f]{16}$'
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
     get:
       tags: [agents]
       operationId: getAgent
@@ -264,8 +265,8 @@ components:
       properties:
         id:
           type: string
-          pattern: '^a_[0-9a-f]{16}$'
-          description: 'a_ + sha256(normalized_url) 前 16 个 hex 字符'
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
+          description: 'URL-safe 的不透明句柄；生成算法由实现选择（spec §4.1），RECOMMENDED 为 a_ + sha256(normalized_url) 前 16 个 hex 字符'
         url:
           type: string
           format: uri
@@ -328,7 +329,7 @@ components:
       properties:
         id:
           type: string
-          pattern: '^a_[0-9a-f]{16}$'
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
         url:
           type: string
           format: uri
@@ -379,6 +380,7 @@ components:
       properties:
         id:
           type: string
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
         url:
           type: string
           format: uri

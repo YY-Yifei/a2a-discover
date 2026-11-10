@@ -52,8 +52,10 @@ A2A 定义了 Agent 之间怎么说话：AgentCard、`/.well-known/agent-card.js
 | `GET` | `/v1/agents/{id}` | 单条，含 card |
 | `DELETE` | `/v1/agents/{id}` | 退订，带 `X-ADP-Token` |
 
-`id` 由归一化 URL 派生（scheme 与 host 小写、去掉默认端口 `:443`、百分号编码大写），
-同一 URL 的不同书写形式收敛为同一条目。
+`url` 归一化后充当去重键（scheme 与 host 小写、去掉默认端口 `:443`、百分号编码大写），
+同一 URL 的不同书写形式收敛为同一条目。`id` 是 Registry 生成的不透明句柄（URL-safe，
+可直接放进 path），**生成算法由实现自选** —— 参考实现用 `a_` + `sha256(归一化 URL)` 前
+16 位，换成 UUID、ULID 或自增编号同样合规。Consumer 不得从 `id` 推导 URL。
 
 探测只回答两个问题：**还活着吗**（2xx + 有效 TLS + 合法 AgentCard）、**卡变了吗**
 （JCS 规范化后 sha256 比对，变了就跟随）。Registry 从不发 A2A 请求、不打分、不排序。

@@ -162,3 +162,47 @@ def test_agent_summary_doc_matches_contract_required():
 def test_published_surface_has_no_stale_proxy_wording():
     """README 不能只承诺「忽略环境代理」—— 条款管的是整条出网路径。"""
     assert "忽略环境代理" not in README
+
+
+def test_identifier_length_claims_match_implementation():
+    """§4.1 的 ``// N 字符`` 长度断言必须等于实现真正产出的长度。
+
+    ``id`` 的算法由实现自选（§4.1），正文不再声称它的固定长度；``cardHash`` 仍是
+    契约钉死的 71 字符，这条断言继续有效。
+    """
+    from adp_registry import card
+
+    produced = card.card_hash({"name": "geo"})
+    claim = re.search(r"^cardHash\s*=.*?//\s*(\d+)\s*字符", MD, re.M)
+    assert claim, "§4.1 缺少 cardHash 的长度断言"
+    assert int(claim.group(1)) == len(produced), (
+        f"cardHash 正文声称 {claim.group(1)} 字符，实现产出 {len(produced)}"
+    )
+
+
+ID_SHAPES = [
+    "a_0bea006cdac4e98a",  # 参考实现选用的 RECOMMENDED 派生
+    "0193b1a0-7c2e-7d3b-9f00-2c1e4a5b6c7d",  # UUIDv7
+    "01ARZ3NDEKTSV4RRFFQ69G5FAV",  # ULID
+    "1",  # 自增编号
+]
+
+
+@pytest.mark.parametrize("schema_name", ["AgentRecord", "AgentRecordWithToken", "AgentSummary"])
+def test_id_pattern_accepts_every_implementation_choice(schema_name):
+    """§4.1 把算法交给实现：契约的 id pattern 只锁 URL-safe 形状，不得锁死派生法。
+
+    只接受 ``a_`` + hex 就等于替所有实现做了选择 —— 那正是本轮要松掉的东西。
+    """
+    pattern = SCHEMAS[schema_name]["properties"]["id"]["pattern"]
+    for shape in ID_SHAPES:
+        assert re.match(pattern, shape), f"{schema_name}.id 拒绝了合法形态：{shape}"
+    for bad in ("a/b", "a b", "x" * 65, ""):
+        assert not re.match(pattern, bad), f"{schema_name}.id 接受了非法形态：{bad!r}"
+
+
+def test_spec_states_id_algorithm_is_implementation_choice():
+    """正文与契约都必须写明「算法由实现选」，否则读者仍会当成硬性派生规则。"""
+    assert "生成算法由实现自选" in MD, "§4.1 没有写明 id 算法由实现选择"
+    assert "生成算法由实现选择" in YAML_TEXT, "契约没有写明 id 算法由实现选择"
+    assert "Consumer MUST NOT 从 `id` 推导" in MD, "§4.1 漏了「id 对 Consumer 不透明」"

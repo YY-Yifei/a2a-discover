@@ -12,7 +12,7 @@ from conftest import make_card
 def test_equivalent_url_variants_share_one_id():
     """spec §4.1：归一化后，同一 URL 的书写变体必须收敛到同一个 id。
 
-    否则会出现「两个 id、同一张卡」，直接打穿「id 是 url 的确定性函数」。
+    否则会出现「两个 id、同一张卡」，直接打穿「同一 url 至多一个条目」（§4.1 性质 3）。
     注意换 URL 换的是**条目**与 `id`，不是身份 —— 身份来自 A2A 签名（§3 I4）。
     """
     variants = [
@@ -69,6 +69,7 @@ def test_card_hash_is_key_order_independent():
 
 
 def test_derive_id_is_deterministic():
+    """本实现选用的 RECOMMENDED 派生法 —— §4.1 不要求算法，只要求 id 稳定且 URL-safe。"""
     url = "https://geo.example.com/.well-known/agent-card.json"
     assert cardlib.derive_id(url) == cardlib.derive_id(url)
     assert cardlib.derive_id(url) != cardlib.derive_id(url + "/")

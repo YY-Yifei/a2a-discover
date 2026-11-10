@@ -16,7 +16,12 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-ID_RE = re.compile(r"^a_[0-9a-f]{16}$")
+ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+"""契约允许的 ``id`` 形状（spec §4.1 性质 1）：URL-safe，可直接放进 path。"""
+
+DERIVED_ID_RE = re.compile(r"^a_[0-9a-f]{16}$")
+"""本实现选用的 RECOMMENDED 派生形式 —— 契约不要求它，换 UUID / ULID / 自增同样合规。"""
+
 CARD_HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 ID_PREFIX = "a_"
@@ -85,7 +90,11 @@ def card_hash(card: Mapping[str, Any]) -> str:
 
 
 def derive_id(url: str) -> str:
-    """``a_`` + sha256(url) 前 16 个 hex 字符 —— 确定性派生，因此重复注册天然幂等。
+    """``a_`` + sha256(url) 前 16 个 hex 字符 —— spec §4.1 的 RECOMMENDED 派生法。
+
+    它是本实现**选用的**方案，不是契约要求：§4.1 只规定 ``id`` 的 URL-safe 形状、
+    条目内稳定、同一 url 至多一个条目、对 Consumer 不透明；算法（UUID / ULID / 自增 /
+    别的摘要）由实现自选。选派生换来「幂等不需要唯一性表」，代价是 64 bit 碰撞。
 
     调用方 MUST 先经 ``netguard.normalize_url`` 归一（spec §4.1），否则同一 URL 的
     书写变体（host 大小写、默认端口、百分号编码）会派生出不同 id，出现「两个 id、
